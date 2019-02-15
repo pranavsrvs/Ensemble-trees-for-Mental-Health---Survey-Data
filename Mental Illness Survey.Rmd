@@ -1,0 +1,325 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+##Model Selection##
+We have used Classification technique as the method to solve this problem because our predictor variable is a binary variable. We chose tree methodology to solve this problem because of multiple categorical variables like gender, country etc. which are good predictors for splitting the variables and getting more precise outcome.
+
+For our analysis - we decided to go ahead and compare the 3 types of tree methodology for classification. 
+
+**1. Random Forest**
+**2. Bagging**
+**3. Classification Tree**
+
+**Quantitative choice**: We did not use Logistic regression to solve this problem because our data was not linearly separable so we could not run a Generalized linear model to solve for this problem. Tuning parameters we chose are -  **out of bag prediction errors, Validation accuracy, Area under the curve to compare and decide between teh three types of classification techniques.**
+
+**Qualitative choice**: Since our data is more prone to over fitting (As we have a lot of categorical variables dependent on each other), a logistic regression or a decision tree is prone to over fitting, Random Forests are used in practice to better generalize the fit. RF provide a good balance between precision and over fitting
+
+**Human choice**: Since our predictor variable depends a lot on person to person, it was better to look at a technique which is not biased with respect to choosing the variables while training the model. In this respect, since Random Forest uses out of bag techniques (With replacement), it kind of reduces the bias towards individual row of the data (Hence the respondents), giving least biased results.
+
+
+##**Setting up the libraries**##
+
+```{r}
+library(dplyr)
+library(randomForest)
+library(lubridate)
+library(ggplot2)
+library(ROCR)
+library(ipred)
+library(tree)
+library(partykit)
+library(party)
+```
+
+##Data preprocessing##
+
+```{r}
+mental <- read.csv(file="survey.csv", header=TRUE)
+glimpse(mental)   #Does the same thing as str, but cleaner, needs dplyr
+summary(mental)
+mental <- subset(mental,mental$Age <100 & mental$Age >0)
+mental$gender2 <- tolower(mental$Gender)
+male <- c("male", "m", "male-ish", "maile", "mal", "male (cis)", "make", "male ", "man","msle", "mail", "malr","cis man")
+trans <- c("trans-female", "something kinda male?", "queer/she/they", "non-binary","nah", "all", "enby", "fluid", "genderqueer", "androgyne", "agender", "male leaning androgynous", "guy (-ish) ^_^", "trans woman", "neuter", "female (trans)", "queer", "ostensibly male, unsure what that really means" )
+female <- c("cis female", "f", "female", "woman",  "femake", "female ","cis-female/femme", "female (cis)", "femail")
+for(i in 1:nrow(mental)) {
+  ifelse(mental$gender2[i] %in% male,mental$gender2[i]<-"male",ifelse(mental$gender2[i] %in% female,mental$gender2[i]<-"female",mental$gender2[i]<-"trans"))
+}
+
+mental <- mental[,-c(5,27)]
+####### Missing Function #######
+missing_fun=function(a){
+  return(length(a)-length(a[! is.na(a)]))
+}
+
+
+missing_values=data.frame(
+  Vars=names(mental),
+  N=apply(mental,2,length),
+  NMISS=apply(mental,2,missing_fun)
+)
+#summary(mental$work_interfere)
+levels(mental$work_interfere) <- c(levels(mental$work_interfere),"no mental health")
+mental$work_interfere[is.na(mental$work_interfere)] <- "no mental health"
+mental<-mental[!is.na(mental$self_employed), ]
+###Removing Time stamp
+mental<-mental[,-c(1)]
+# Change treatment of yes and no to 1 and 0
+mental$treatment.num[mental$treatment == "Yes"] <- 1
+mental$treatment.num[mental$treatment == "No"] <- 0
+
+# Changing class of gender2 to factor
+mental$gender2 <- as.factor(mental$gender2)
+mental$Country2 <- ifelse(mental$Country == "United States","United States",ifelse(mental$Country == "United Kingdom","United Kingdom",ifelse(mental$Country == "Canada","Canada",ifelse(mental$Country == "Germany","Germany",ifelse(mental$Country == "Australia","Australia","Others")))))
+mental$Country2 <- as.factor(mental$Country2)
+
+mental$remote_work <- as.factor(mental$remote_work)
+```
+
+##**Data Partition**##
+
+```{r}
+set.seed(100)
+mental <- mutate(
+  mental, 
+  training = sample(1:2,replace = TRUE, prob= c(0.7,0.3), size = nrow(mental)))
+
+mental.train <- filter(mental, training == 1)
+mental.test <- filter(mental, training == 2)
+```
+
+##**1. Model Fitting for Random Forest**##
+
+**Preparing the data for Random Forest model**
+
+```{r}
+##25 explanatory variables (exclusing Timestamp and response variable)
+# We have split the data into test and train by using a 30-70% split
+
+# Remove Country, Gender, treatment, and treatment.num in preparation for the optimal mtry test
+mental.train <- mental.train[,-c(2, 3, 28, 26)]
+mental.test <- mental.test[,-c(2, 3, 28, 26)]
+```
+
+##Tuning the classification models:##
+
+Evaluating a Classification Model:
+
+**We will evaluate the performance of our classification model using the below parameters and tune the model to improve the below metrics:**
+**.	Classification accuracy: percentage of correct predictions**
+**.	Confusion matrix: Table that describes the performance of a classification model**
+  o	True Positives (TP): we correctly predicted that a person gets treatment 
+  o	True Negatives (TN): we correctly predicted that a person doesn't get treatment
+  o	False Positives (FP): we incorrectly predicted that a person gets treatment (a "Type I error")
+  o	False Negatives (FN): we incorrectly predicted that they don't get treatment (a "Type II error")
+**.	AUC: is the percentage of the ROC plot that is underneath the curve**
+  o	.90-1 = excellent (A)
+  o	.80-.90 = good (B)
+  o	.70-.80 = fair (C)
+  o	.60-.70 = poor (D)
+  o	.50-.60 = fail (F)
+**.	Other tree tuning techniques like getting the optimal mtry and ntree values**
+
+##Best Random Forest Model## 
+
+**Finding the optimal mtry values - Other Iterations not shown in the report for simplicity**
+
+```{r}
+mtry <- tuneRF(mental.train[-4], mental.train$treatment, ntreeTry=500,
+               stepFactor=1.5,improve=0.01, trace=TRUE, plot=TRUE)
+best.m <- mtry[mtry[, 2] == min(mtry[, 2]), 1]
+print(mtry)
+print(best.m)
+```
+
+**We have determined that the optimal mtry = 6**
+
+**Now running the randomForest model**
+
+```{r}
+rf.mental <- randomForest(treatment ~ ., data = mental.train, mtry = 6, ntree = 600, 
+                          importance = T)
+print(rf.mental)
+```
+
+####looking at summary of model modelRandom####
+
+**OOB estimate of  error rate: 18.44%**
+
+###Evaluate variable importance##
+
+```{r}
+imp<-importance(rf.mental)
+varImpPlot(rf.mental)
+```
+
+**Clearly, from the plot we see that 'work interfere' and 'family history' are the most important variables followed by country and care option, this observation is also confirmed by the graphs that we created from the data**
+
+##Predictions##
+
+**Let's now check what the Random forest model is predicting for the test data set and then compare these predicted values with actual values**
+
+```{r}
+# Predicting on Validation set
+predValid <- predict(rf.mental, mental.test, type = "class")
+# Checking classification accuracy
+mean(predValid == mental.test$treatment)
+```
+
+**Prediction accuracy is 86.2% Accuracy**
+
+**Creating the confusion matrix**
+
+```{r}
+Actual <- factor(c(0, 0, 1, 1))
+Predicted <- factor(c(0, 1, 0, 1))
+Y      <- c(153, 18, 35, 184)
+df <- data.frame(Actual, Predicted, Y)
+
+ggplot(data =  df, mapping = aes(x = Actual, y = Predicted)) +
+  geom_tile(aes(fill = Y), colour = "white") +
+  geom_text(aes(label = sprintf("%1.0f", Y)), vjust = 1) +
+  scale_fill_gradient(low = "gray", high = "yellow") +
+  theme_bw() + theme(legend.position = "none")
+```
+
+##Evaluating the Model##
+
+**Let's plot the ROC curve for random forest model**
+
+```{r}
+pred.rf = predict(rf.mental, type = "prob", newdata = mental.test)
+forestpred = prediction(pred.rf[,2], mental.test$treatment)
+forestperf <- performance(forestpred,"tpr","fpr")
+forestperf2 <- performance(forestpred,measure = "auc")
+plot(forestperf, main="ROC", colorize=T)
+plot(forestperf, col=3, add=TRUE)
+```
+
+**The Area under the curve is 93%**
+
+##2. Bagging##
+
+```{r}
+#Fitting a bagging model to our training data
+bag.mental <- bagging(treatment ~ ., data = mental.train, coob=T)
+print(bag.mental)
+```
+
+**Out-of-bag estimate of misclassification error:  22.46%**
+
+**Checking classification accuracy on validation data**
+```{r}
+mental.test.bag <- predict(bag.mental, newdata=mental.test)
+table(mental.test.bag, mental.test$treatment)
+```
+
+**Creating confusion matrix for the bagging model**
+
+```{r}
+Actual <- factor(c(0, 0, 1, 1))
+Predicted <- factor(c(0, 1, 0, 1))
+Y      <- c(154, 25, 34, 177)
+df <- data.frame(Actual, Predicted, Y)
+
+ggplot(data =  df, mapping = aes(x = Actual, y = Predicted)) +
+  geom_tile(aes(fill = Y), colour = "white") +
+  geom_text(aes(label = sprintf("%1.0f", Y)), vjust = 1) +
+  scale_fill_gradient(low = "cornsilk2", high = "indianred4") +
+  theme_bw() + theme(legend.position = "none")
+```
+**Model Accuracy - 84%**
+
+**Plotting the ROC curve for the bagging model**
+
+```{r}
+mental.test.bag.prob = predict(bag.mental, type = "prob", newdata = mental.test)
+bagpred = prediction(mental.test.bag.prob[,2], mental.test$treatment)
+bagperf = performance(bagpred, "tpr", "fpr")
+plot(bagperf, main="ROC", colorize=T)
+plot(bagperf, col=2, add=TRUE)
+auc.curve = performance(bagpred, "auc")
+```
+**We get an AUC value of 91% - lower than Random forest**
+
+##So Random Forest is doing better than Bagging technique, lets check classification Tree##
+
+##3. Classification Tree##
+
+```{r}
+library("rpart")
+library("partykit")
+tree.mental1 <- ctree(treatment ~ ., data = mental.train)
+tree.mental2 <- rpart(treatment ~ ., data = mental.train)
+plot(tree.mental1)
+```
+
+**The classification tree is able to split the data very well and we clearly see the end nodes defining the y-variable very cleanly**
+
+**Checking the AUC performance of the tree**
+
+```{r}
+library(ROCR)
+fit.pr = predict(tree.mental2,newdata=mental.test,type="prob")[,2]
+fit.pred = prediction(fit.pr,mental.test$treatment)
+fit.perf = performance(fit.pred,"tpr","fpr")
+plot(fit.perf, main="ROC", colorize=T)
+plot(fit.perf, col=1, add=TRUE)
+```
+
+##Model Comparison##
+
+**We would like to see the accuracy, OOB errors and AUC comparison of the 3 models**
+
+```{r}
+df1 <- data.frame(trtt = c("RandomForest","Bagging","Classification Tree"), outcomee = c(.1844,0.2246,0.152))
+ggplot(data = df1, aes(x=trtt,y=outcomee)) + geom_bar(stat="identity", fill ="indianred4", width=0.5) + 
+  scale_y_continuous(limits=c(0,0.3)) + xlab("Method") + ylab("Errors") + ggtitle("Model Comparison - Errors")
+```
+
+
+```{r}
+df <- data.frame(trt = c("RandomForest","Bagging","Classification Tree"), outcome = c(0.86,0.84,0.82))
+ggplot(data = df, aes(x=trt,y=outcome)) + geom_bar(stat="identity", fill ="dodgerblue4", width=0.8) + 
+  scale_y_continuous(limits=c(0,0.9)) + xlab("Method") + ylab("Accuracy") + ggtitle("Model Comparison - Accuracy")
+```
+
+```{r}
+plot(forestperf, main="ROC", colorize=T)
+plot(forestperf, col=3, add=TRUE)
+plot(fit.perf, col=1, add=TRUE)
+plot(bagperf, col=2, add=TRUE)
+legend(0.6, 0.6, c('ctree', 'bagging', 'rforest'), 1:3)
+abline(0, 1,lty=2)
+```
+
+**As we see from the model comparison graphs, RandomForest performs better in terms of classification of the data, we have a better model accuracy, more AUC and less error rate than Bagging and CART**
+
+
+##Communication of results, and advice to a non-expert##
+
+**From our analysis, we can conclude that:**
+- If the person has a family history of mental issues, she is more likely to get treatment and the trend does not change over the lifetime. This makes sense because such a person knows the negative consequences of mental issues and likes to be treated early.
+- There are not many employees who are at ease to discuss their mental health issues with their supervisors. This does not mean that the work culture is not welcoming, it is but there is a scope of improvement. Probably having a better structure my help
+- We also see that if people know about their mental health options that their employer provide, they will get treatment earlier in their life compared to other categories
+- There seems to be a lack of proper structure and system for the employees to discuss about their problems and issues (be is illness or medical leaves)
+- Also, a lot of respondents are ok to discuss their issues and do not feel that it might cause any bad effects on their job.
+- Talking about the available resources in the company, we think that many of them are not enough educated about the available resources and would benefit more if they knew about the resources available. 
+- A lot of employees found that the employers did not discuss about the mental health as a part of the program.
+
+**What are the strongest predictors of mental health illness or certain attitudes towards mental health in the workplace?**
+
+1. work_interfere -- we believe that work interference is an important indicator of whether the person will get the treatment or not because we see that people's attitude toward this question changes their behavior regarding getting the treatment. As an example, if the person says never, he will only get treatment as gets older at their retirement age because he has never felt that to improve the work performance he needs to be treated. On the other hand, people who think their mental issue always or often interfere with their work, always get treatment. As a result we believe that work interference variable helps us to classify people based on the parameter of getting treatment or not
+2. family_history -- If the person has a family history of mental issues, she is more likely to get treatment and the trend does not change over the lifetime. This makes sense because such a person knows the negative consequences of mental issues and likes to be treated early. 
+3. care_options -- if people know about their mental health options that their employer provide, they will get treatment earlier in their life compared to other categories
+4. Country -- People from Australia with increasing age are more prone to mental health issues and require more attention than the individuals from the United States (Which is surprising because the number of mental health issues in the United states are the highest)
+5. gender -- men tend to get more treatment as age increases. Conversely, the older women are, the lees treatments they obtain. For trans group we see a completely different pattern and they always get treatment independent of age. 
+
+From the Random Forest results, we can conclude that the employers should concentrate on the above variables in case they want to create a maximum impact on the mental health of the employees. 
+
