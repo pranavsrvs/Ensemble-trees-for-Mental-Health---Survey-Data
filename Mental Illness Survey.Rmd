@@ -35,6 +35,7 @@ library(ipred)
 library(tree)
 library(partykit)
 library(party)
+library(ggplot2)
 ```
 
 ##Data preprocessing##
