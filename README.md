@@ -4,4 +4,4 @@ Survey data regarding mental health in the workplace from 2014 was used.
 
 The project contains following sections:
 1-survey.csv dataset.
-2-BAIT 509 R Code.rmd: the rmd containing the code
+2-BAIT 509 R Code.rmd: rmd containing the code
